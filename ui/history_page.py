@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from modules.database import get_attendance_history
+from modules.database import delete_today_attendance, get_attendance_history
 
 
 class HistoryPage(QWidget):
@@ -37,19 +37,25 @@ class HistoryPage(QWidget):
         self.date_edit.setDate(QDate.currentDate())
         self.refresh_button = QPushButton("Làm mới")
         self.export_button = QPushButton("Xuất CSV")
+        self.delete_today_button = QPushButton("Xóa lịch sử hôm nay")
+
         controls.addWidget(self.filter_checkbox)
         controls.addWidget(self.date_edit)
         controls.addWidget(self.refresh_button)
         controls.addWidget(self.export_button)
+        controls.addWidget(self.delete_today_button)
         controls.addStretch()
 
-        self.table = QTableWidget(0, 6)
-        self.table.setHorizontalHeaderLabels(["Mã SV", "Họ tên", "Lớp", "Ngày", "Giờ", "Trạng thái"])
+        self.table = QTableWidget(0, 7)
+        self.table.setHorizontalHeaderLabels(
+            ["Mã SV", "Họ tên", "Lớp", "Ngày", "Check-in", "Check-out", "Trạng thái"]
+        )
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
 
         self.refresh_button.clicked.connect(self.load_history)
         self.export_button.clicked.connect(self.export_csv)
+        self.delete_today_button.clicked.connect(self.delete_today_history)
         self.filter_checkbox.stateChanged.connect(self.load_history)
         self.date_edit.dateChanged.connect(self.load_history)
 
@@ -68,10 +74,35 @@ class HistoryPage(QWidget):
             for col_index, value in enumerate(row_data):
                 self.table.setItem(row_index, col_index, QTableWidgetItem(value or ""))
 
+    def refresh_dashboard(self):
+        """Refresh dashboard nếu HistoryPage đang nằm trong MainWindow."""
+        main_window = self.window()
+        if hasattr(main_window, "home_page"):
+            main_window.home_page.load_dashboard_data()
+
+    def delete_today_history(self):
+        """Xóa lịch sử check-in/check-out hôm nay, giữ nguyên sinh viên, ảnh và model."""
+        confirm = QMessageBox.question(
+            self,
+            "Xác nhận xóa",
+            "Bạn có chắc muốn xóa toàn bộ lịch sử check-in/check-out của ngày hôm nay?",
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        deleted_count = delete_today_attendance()
+        self.load_history()
+        self.refresh_dashboard()
+        QMessageBox.information(
+            self,
+            "Đã xóa lịch sử hôm nay",
+            f"Đã xóa {deleted_count} bản ghi check-in/check-out hôm nay.",
+        )
+
     def export_csv(self):
         rows = get_attendance_history(self.current_date_filter())
         if not rows:
-            QMessageBox.warning(self, "Không có dữ liệu", "Không có lịch sử điểm danh để xuất.")
+            QMessageBox.warning(self, "Không có dữ liệu", "Không có lịch sử để xuất.")
             return
 
         default_name = "attendance_history.csv"
@@ -84,6 +115,9 @@ class HistoryPage(QWidget):
         if not file_path:
             return
 
-        df = pd.DataFrame(rows, columns=["Mã sinh viên", "Họ tên", "Lớp", "Ngày", "Giờ", "Trạng thái"])
+        df = pd.DataFrame(
+            rows,
+            columns=["Mã sinh viên", "Họ tên", "Lớp", "Ngày", "Check-in", "Check-out", "Trạng thái"],
+        )
         df.to_csv(file_path, index=False, encoding="utf-8-sig")
         QMessageBox.information(self, "Xuất CSV", f"Đã xuất file: {file_path}")

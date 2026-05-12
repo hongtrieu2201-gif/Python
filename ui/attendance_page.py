@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 
 import cv2
 import numpy as np
@@ -9,6 +10,9 @@ from PyQt6.QtWidgets import QHBoxLayout, QLabel, QMessageBox, QPushButton, QVBox
 
 from modules.attendance_service import AttendanceService
 from modules.face_recognizer import FaceRecognizer
+
+
+SCAN_COOLDOWN_SECONDS = 8
 
 
 def get_unicode_font(font_size):
@@ -28,11 +32,7 @@ def get_unicode_font(font_size):
 
 
 def draw_unicode_text(frame, text, position, font_size, color):
-    """Vẽ text Unicode tiếng Việt lên frame OpenCV bằng Pillow.
-
-    frame dùng định dạng BGR của OpenCV, còn Pillow dùng RGB nên cần chuyển đổi qua lại.
-    color truyền theo định dạng BGR để dùng thống nhất với cv2.rectangle.
-    """
+    """Vẽ text Unicode tiếng Việt lên frame OpenCV bằng Pillow."""
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     pil_image = Image.fromarray(rgb_frame)
     draw = ImageDraw.Draw(pil_image)
@@ -40,7 +40,6 @@ def draw_unicode_text(frame, text, position, font_size, color):
 
     b, g, r = color
     draw.text(position, text, font=font, fill=(r, g, b))
-
     return cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
 
 
@@ -50,6 +49,7 @@ class AttendancePage(QWidget):
         self.cap = None
         self.recognizer = FaceRecognizer()
         self.attendance_service = AttendanceService()
+        self.last_scan_times = {}
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_frame)
         self.setup_ui()
@@ -110,6 +110,15 @@ class AttendancePage(QWidget):
         self.timer.start(30)
         self.status_label.setText("Đang nhận diện...")
 
+    def can_process_student(self, student_id):
+        """Tránh xử lý liên tục nhiều frame cho cùng một lần quét mặt."""
+        now = datetime.now()
+        last_time = self.last_scan_times.get(student_id)
+        if last_time and (now - last_time).total_seconds() < SCAN_COOLDOWN_SECONDS:
+            return False
+        self.last_scan_times[student_id] = now
+        return True
+
     def update_frame(self):
         if self.cap is None:
             return
@@ -129,7 +138,6 @@ class AttendancePage(QWidget):
             self.show_frame(frame)
             return
 
-        # Mỗi frame có khuôn mặt đều cập nhật status mới, tránh giữ lại text cũ.
         frame_status = "Đã thấy khuôn mặt: Unknown."
         for result in results:
             x, y, w, h = result["rect"]
@@ -142,18 +150,29 @@ class AttendancePage(QWidget):
                 color = (0, 180, 80)
                 frame_status = f"Đã nhận diện: {student_id} - {full_name} - {class_name or ''}."
 
-                # Service tự kiểm tra database để không tạo bản ghi trùng trong ngày.
-                attendance_result = self.attendance_service.mark_present(student_id)
-                if attendance_result["inserted"]:
-                    frame_status = f"Điểm danh thành công: {full_name} lúc {attendance_result['time']}"
-                else:
-                    frame_status = f"{full_name} đã điểm danh hôm nay lúc {attendance_result['old_time']}"
+                if self.can_process_student(student_id):
+                    attendance_result = self.attendance_service.mark_present(student_id)
+                    action = attendance_result["action"]
+                    if action == "check_in":
+                        frame_status = (
+                            f"Check-in thành công: {full_name} lúc "
+                            f"{attendance_result['check_in_time']} ({attendance_result['status']})"
+                        )
+                    elif action == "check_out":
+                        frame_status = (
+                            f"Check-out thành công: {full_name} lúc "
+                            f"{attendance_result['check_out_time']}"
+                        )
+                    else:
+                        frame_status = (
+                            f"{full_name} đã check-out hôm nay lúc "
+                            f"{attendance_result['check_out_time']}"
+                        )
             else:
                 text = f"Unknown ({confidence:.1f})"
                 color = (40, 40, 220)
                 frame_status = "Đã thấy khuôn mặt: Unknown."
 
-            # Giữ OpenCV để vẽ khung, dùng Pillow để vẽ chữ Unicode.
             cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
             frame = draw_unicode_text(
                 frame,
@@ -179,6 +198,7 @@ class AttendancePage(QWidget):
 
     def release_camera(self):
         self.timer.stop()
+        self.last_scan_times.clear()
         if self.cap is not None:
             self.cap.release()
             self.cap = None

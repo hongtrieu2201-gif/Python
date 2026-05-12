@@ -6,6 +6,7 @@ from PyQt6.QtGui import QIcon, QImage, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -41,7 +42,11 @@ class RegisterFacePage(QWidget):
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(14)
 
+        student_row = QHBoxLayout()
         self.student_combo = QComboBox()
+        self.upload_button = QPushButton("Tải ảnh từ máy")
+        student_row.addWidget(self.student_combo, 1)
+        student_row.addWidget(self.upload_button)
 
         self.video_label = QLabel("Webcam đăng ký khuôn mặt")
         self.video_label.setObjectName("cameraBox")
@@ -86,6 +91,7 @@ class RegisterFacePage(QWidget):
         self.image_list.setMinimumHeight(190)
 
         self.student_combo.currentIndexChanged.connect(self.load_face_images)
+        self.upload_button.clicked.connect(self.upload_face_image)
         self.open_button.clicked.connect(self.open_camera)
         self.capture_button.clicked.connect(self.capture_face)
         self.close_button.clicked.connect(self.release_camera)
@@ -93,7 +99,7 @@ class RegisterFacePage(QWidget):
         self.refresh_images_button.clicked.connect(self.load_face_images)
         self.delete_image_button.clicked.connect(self.delete_selected_image)
 
-        layout.addWidget(self.student_combo)
+        layout.addLayout(student_row)
         layout.addWidget(self.video_label)
         layout.addLayout(camera_buttons)
         layout.addWidget(self.status_label)
@@ -137,9 +143,10 @@ class RegisterFacePage(QWidget):
         return image_paths
 
     def load_face_images(self):
-        """Hiển thị ảnh khuôn mặt dạng thumbnail 120x120."""
+        """Hiển thị ảnh khuôn mặt dạng thumbnail 120x120 và cập nhật số lượng ảnh."""
         self.image_list.clear()
         image_paths = self.get_face_image_paths()
+        self.gallery_title.setText(f"Ảnh khuôn mặt đã lưu ({len(image_paths)} ảnh)")
 
         if not image_paths:
             self.empty_images_label.setText("Chưa có ảnh khuôn mặt")
@@ -185,6 +192,72 @@ class RegisterFacePage(QWidget):
             self.load_face_images()
         except OSError as error:
             QMessageBox.critical(self, "Lỗi xóa ảnh", f"Không xóa được ảnh: {error}")
+
+    def get_next_upload_path(self, student_id):
+        """Tạo đường dẫn upload_1.jpg, upload_2.jpg... không trùng file cũ."""
+        student_dir = os.path.join(DATASET_DIR, student_id)
+        os.makedirs(student_dir, exist_ok=True)
+
+        index = 1
+        while True:
+            file_path = os.path.join(student_dir, f"upload_{index}.jpg")
+            if not os.path.exists(file_path):
+                return file_path
+            index += 1
+
+    def detect_face_from_uploaded_image(self, image):
+        """Detect mặt trong ảnh upload bằng Haar Cascade theo tham số yêu cầu."""
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        gray = cv2.equalizeHist(gray)
+        faces = self.detector.face_cascade.detectMultiScale(
+            gray,
+            scaleFactor=1.1,
+            minNeighbors=5,
+            minSize=(100, 100),
+        )
+        if len(faces) == 0:
+            return None, faces
+
+        # Nếu có nhiều mặt, chọn mặt lớn nhất để lưu.
+        x, y, w, h = max(faces, key=lambda rect: rect[2] * rect[3])
+        face_roi = gray[y : y + h, x : x + w]
+        return face_roi, faces
+
+    def upload_face_image(self):
+        """Chọn ảnh từ máy tính, cắt khuôn mặt và lưu vào dataset của sinh viên."""
+        student_id = self.student_combo.currentData()
+        if not student_id:
+            QMessageBox.warning(self, "Chưa chọn sinh viên", "Vui lòng chọn sinh viên trước khi tải ảnh.")
+            return
+
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Chọn ảnh khuôn mặt",
+            os.getcwd(),
+            "Image Files (*.jpg *.jpeg *.png)",
+        )
+        if not file_path:
+            return
+
+        image = cv2.imread(file_path)
+        if image is None:
+            QMessageBox.warning(self, "Lỗi đọc ảnh", "Không đọc được file ảnh đã chọn.")
+            return
+
+        face_roi, _faces = self.detect_face_from_uploaded_image(image)
+        if face_roi is None:
+            QMessageBox.warning(
+                self,
+                "Không phát hiện khuôn mặt",
+                "Không phát hiện được khuôn mặt trong ảnh đã chọn.",
+            )
+            return
+
+        save_path = self.get_next_upload_path(student_id)
+        cv2.imwrite(save_path, face_roi)
+        self.status_label.setText(f"Đã tải ảnh: {save_path}")
+        self.load_face_images()
+        QMessageBox.information(self, "Thành công", "Tải ảnh khuôn mặt thành công.")
 
     def open_camera(self):
         if self.cap is None:

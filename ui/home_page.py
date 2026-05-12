@@ -2,32 +2,53 @@ import json
 import os
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QFrame, QGridLayout, QLabel, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from modules.database import get_dashboard_stats
 from modules.face_trainer import DATASET_DIR, LABEL_MAP_PATH, MODEL_PATH
 
 
 class StatCard(QFrame):
-    """Card thống kê nhỏ trên dashboard."""
+    """Card thống kê trên dashboard."""
 
     def __init__(self, title, value, note, color):
         super().__init__()
         self.setObjectName("dashboardCard")
+        self.setMinimumHeight(148)
         self.setStyleSheet(
-            f"""
-            QFrame#dashboardCard {{
-                background: white;
-                border: 1px solid #e3e8f2;
-                border-left: 6px solid {color};
+            """
+            QFrame#dashboardCard {
+                background-color: #ffffff;
+                border: 1px solid #e2e8f0;
                 border-radius: 12px;
+            }
+            """
+        )
+
+        root_layout = QHBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+
+        accent_bar = QFrame()
+        accent_bar.setFixedWidth(7)
+        accent_bar.setStyleSheet(
+            f"""
+            QFrame {{
+                background-color: {color};
+                border: none;
+                border-top-left-radius: 12px;
+                border-bottom-left-radius: 12px;
             }}
             """
         )
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 16, 18, 16)
-        layout.setSpacing(8)
+        content = QWidget()
+        content.setObjectName("cardContent")
+        content.setStyleSheet("QWidget#cardContent { background: transparent; border: none; }")
+
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(18, 16, 18, 16)
+        content_layout.setSpacing(8)
 
         self.title_label = QLabel(title)
         self.title_label.setObjectName("cardTitle")
@@ -39,10 +60,13 @@ class StatCard(QFrame):
         self.note_label.setObjectName("cardNote")
         self.note_label.setWordWrap(True)
 
-        layout.addWidget(self.title_label)
-        layout.addWidget(self.value_label)
-        layout.addWidget(self.note_label)
-        layout.addStretch()
+        content_layout.addWidget(self.title_label)
+        content_layout.addWidget(self.value_label)
+        content_layout.addWidget(self.note_label)
+        content_layout.addStretch()
+
+        root_layout.addWidget(accent_bar)
+        root_layout.addWidget(content, 1)
 
     def set_value(self, value, note=None):
         self.value_label.setText(str(value))
@@ -65,7 +89,7 @@ class HomePage(QWidget):
         title = QLabel("Face Attendance Desktop")
         title.setObjectName("pageTitle")
 
-        subtitle = QLabel("Dashboard tổng quan hệ thống điểm danh khuôn mặt sinh viên.")
+        subtitle = QLabel("Dashboard tổng quan hệ thống check-in/check-out bằng khuôn mặt.")
         subtitle.setObjectName("mutedText")
         subtitle.setWordWrap(True)
 
@@ -75,17 +99,23 @@ class HomePage(QWidget):
             "Sinh viên đã lưu trong SQLite",
             "#2f6fed",
         )
-        self.card_attended_today = StatCard(
-            "Đã điểm danh hôm nay",
+        self.card_checked_in_today = StatCard(
+            "Đã check-in hôm nay",
             "0",
-            "Số sinh viên có bản ghi trong ngày",
+            "Số sinh viên đã quét check-in",
             "#10b981",
         )
-        self.card_not_attended_today = StatCard(
-            "Chưa điểm danh hôm nay",
+        self.card_late_today = StatCard(
+            "Đi trễ hôm nay",
             "0",
-            "Tính theo tổng sinh viên trừ số đã điểm danh",
+            "Check-in sau 07:30",
             "#f59e0b",
+        )
+        self.card_not_checked_out_today = StatCard(
+            "Chưa check-out",
+            "0",
+            "Đã check-in nhưng chưa check-out",
+            "#ef4444",
         )
         self.card_face_images = StatCard(
             "Tổng ảnh khuôn mặt",
@@ -97,16 +127,17 @@ class HomePage(QWidget):
             "Trạng thái model",
             "Chưa train",
             "Kiểm tra models/face_model.yml và label_map.json",
-            "#ef4444",
+            "#0ea5e9",
         )
 
         grid = QGridLayout()
         grid.setSpacing(16)
         grid.addWidget(self.card_total_students, 0, 0)
-        grid.addWidget(self.card_attended_today, 0, 1)
-        grid.addWidget(self.card_not_attended_today, 0, 2)
-        grid.addWidget(self.card_face_images, 1, 0)
-        grid.addWidget(self.card_model_status, 1, 1, 1, 2)
+        grid.addWidget(self.card_checked_in_today, 0, 1)
+        grid.addWidget(self.card_late_today, 0, 2)
+        grid.addWidget(self.card_not_checked_out_today, 1, 0)
+        grid.addWidget(self.card_face_images, 1, 1)
+        grid.addWidget(self.card_model_status, 1, 2)
 
         info = QLabel("Dữ liệu dashboard được lấy tự động từ SQLite, thư mục dataset và file model.")
         info.setObjectName("infoBox")
@@ -151,8 +182,9 @@ class HomePage(QWidget):
         model_trained = self.is_model_trained()
 
         self.card_total_students.set_value(stats["total_students"])
-        self.card_attended_today.set_value(stats["attended_today"])
-        self.card_not_attended_today.set_value(stats["not_attended_today"])
+        self.card_checked_in_today.set_value(stats["checked_in_today"])
+        self.card_late_today.set_value(stats["late_today"])
+        self.card_not_checked_out_today.set_value(stats["not_checked_out_today"])
         self.card_face_images.set_value(face_image_count)
 
         if model_trained:

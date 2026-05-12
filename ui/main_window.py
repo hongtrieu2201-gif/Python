@@ -147,16 +147,22 @@ class MainWindow(QMainWindow):
                 color: #111827;
             }
             #cardTitle {
+                background: transparent;
+                border: none;
                 color: #64748b;
                 font-size: 14px;
                 font-weight: 700;
             }
             #cardValue {
+                background: transparent;
+                border: none;
                 color: #111827;
-                font-size: 34px;
+                font-size: 36px;
                 font-weight: 800;
             }
             #cardNote {
+                background: transparent;
+                border: none;
                 color: #64748b;
                 font-size: 13px;
             }

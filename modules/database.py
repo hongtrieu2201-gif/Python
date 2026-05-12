@@ -16,8 +16,14 @@ def get_connection():
     return conn
 
 
+def column_exists(cursor, table_name, column_name):
+    cursor.execute(f"PRAGMA table_info({table_name})")
+    columns = [row[1] for row in cursor.fetchall()]
+    return column_name in columns
+
+
 def init_database():
-    """Tạo các bảng cần thiết nếu chưa tồn tại."""
+    """Tạo bảng và migrate attendance sang mô hình check-in/check-out."""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -43,7 +49,31 @@ def init_database():
             """
         )
 
-        # Nếu từng có dữ liệu trùng trước đó, giữ lại dòng đầu tiên trong ngày.
+        if not column_exists(cursor, "attendance", "check_in_time"):
+            cursor.execute("ALTER TABLE attendance ADD COLUMN check_in_time TEXT")
+        if not column_exists(cursor, "attendance", "check_out_time"):
+            cursor.execute("ALTER TABLE attendance ADD COLUMN check_out_time TEXT")
+
+        # Dữ liệu cũ dùng cột time, chuyển sang check_in_time để không mất lịch sử.
+        cursor.execute(
+            """
+            UPDATE attendance
+            SET check_in_time = COALESCE(check_in_time, time)
+            WHERE check_in_time IS NULL
+            """
+        )
+        cursor.execute(
+            """
+            UPDATE attendance
+            SET status = CASE
+                WHEN check_in_time > '07:30:00' THEN 'Late'
+                ELSE 'Present'
+            END
+            WHERE check_in_time IS NOT NULL
+            """
+        )
+
+        # Nếu từng có dữ liệu trùng, giữ lại dòng đầu tiên của mỗi sinh viên trong ngày.
         cursor.execute(
             """
             DELETE FROM attendance
@@ -55,7 +85,6 @@ def init_database():
             """
         )
 
-        # Chặn trùng ở tầng database: mỗi sinh viên chỉ có 1 dòng trong 1 ngày.
         cursor.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_attendance_student_date
@@ -103,30 +132,31 @@ def get_student(student_id):
         return cursor.fetchone()
 
 
-def get_attendance_time(student_id, date_text):
-    """Lấy giờ điểm danh cũ của sinh viên trong một ngày, nếu đã có."""
+def get_today_attendance(student_id, date_text):
+    """Lấy bản ghi check-in/check-out trong ngày của một sinh viên."""
     with get_connection() as conn:
         cursor = conn.execute(
             """
-            SELECT time
+            SELECT id, check_in_time, check_out_time, status
             FROM attendance
             WHERE student_id = ? AND date = ?
-            ORDER BY id ASC
             LIMIT 1
             """,
             (student_id, date_text),
         )
-        row = cursor.fetchone()
-        return row[0] if row else None
+        return cursor.fetchone()
 
 
-def add_attendance(student_id, date_text, time_text, status="Present"):
-    """Lưu điểm danh nếu sinh viên chưa được điểm danh trong ngày."""
+def add_check_in(student_id, date_text, check_in_time, status):
+    """Tạo bản ghi check-in đầu tiên trong ngày."""
     try:
         with get_connection() as conn:
             conn.execute(
-                "INSERT INTO attendance(student_id, date, time, status) VALUES (?, ?, ?, ?)",
-                (student_id, date_text, time_text, status),
+                """
+                INSERT INTO attendance(student_id, date, time, check_in_time, check_out_time, status)
+                VALUES (?, ?, ?, ?, NULL, ?)
+                """,
+                (student_id, date_text, check_in_time, check_in_time, status),
             )
             conn.commit()
             return True
@@ -134,9 +164,27 @@ def add_attendance(student_id, date_text, time_text, status="Present"):
         return False
 
 
+def update_check_out(attendance_id, check_out_time):
+    """Cập nhật check-out cho bản ghi đã check-in."""
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE attendance SET check_out_time = ? WHERE id = ? AND check_out_time IS NULL",
+            (check_out_time, attendance_id),
+        )
+        conn.commit()
+        return conn.total_changes > 0
+
+
 def get_attendance_history(date_filter=None):
     query = """
-        SELECT a.student_id, s.full_name, s.class_name, a.date, a.time, a.status
+        SELECT
+            a.student_id,
+            s.full_name,
+            s.class_name,
+            a.date,
+            a.check_in_time,
+            COALESCE(a.check_out_time, 'Chưa check-out'),
+            a.status
         FROM attendance a
         LEFT JOIN students s ON a.student_id = s.student_id
     """
@@ -144,26 +192,51 @@ def get_attendance_history(date_filter=None):
     if date_filter:
         query += " WHERE a.date = ?"
         params = (date_filter,)
-    query += " ORDER BY a.date DESC, a.time DESC"
+    query += " ORDER BY a.date DESC, a.check_in_time DESC"
 
     with get_connection() as conn:
         cursor = conn.execute(query, params)
         return cursor.fetchall()
 
 
+def delete_today_attendance():
+    """Xóa toàn bộ lịch sử check-in/check-out hôm nay, không đụng dữ liệu khác."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    with get_connection() as conn:
+        cursor = conn.execute("DELETE FROM attendance WHERE date = ?", (today,))
+        conn.commit()
+        return cursor.rowcount
+
+
 def get_dashboard_stats():
-    """Lấy các số liệu tổng quan để hiển thị trên trang chủ."""
+    """Lấy số liệu tổng quan cho dashboard."""
     today = datetime.now().strftime("%Y-%m-%d")
     with get_connection() as conn:
         total_students = conn.execute("SELECT COUNT(*) FROM students").fetchone()[0]
-        attended_today = conn.execute(
-            "SELECT COUNT(DISTINCT student_id) FROM attendance WHERE date = ?",
+        checked_in_today = conn.execute(
+            "SELECT COUNT(*) FROM attendance WHERE date = ? AND check_in_time IS NOT NULL",
+            (today,),
+        ).fetchone()[0]
+        late_today = conn.execute(
+            "SELECT COUNT(*) FROM attendance WHERE date = ? AND status = 'Late'",
+            (today,),
+        ).fetchone()[0]
+        not_checked_out_today = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM attendance
+            WHERE date = ?
+              AND check_in_time IS NOT NULL
+              AND check_out_time IS NULL
+            """,
             (today,),
         ).fetchone()[0]
 
-    not_attended_today = max(total_students - attended_today, 0)
+    not_checked_in_today = max(total_students - checked_in_today, 0)
     return {
         "total_students": total_students,
-        "attended_today": attended_today,
-        "not_attended_today": not_attended_today,
+        "checked_in_today": checked_in_today,
+        "not_checked_in_today": not_checked_in_today,
+        "late_today": late_today,
+        "not_checked_out_today": not_checked_out_today,
     }
