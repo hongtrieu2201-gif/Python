@@ -2,9 +2,9 @@ import json
 import os
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
-from modules.database import get_dashboard_stats
+from modules.database import get_course_sections, get_dashboard_stats
 from modules.face_trainer import DATASET_DIR, LABEL_MAP_PATH, MODEL_PATH
 
 
@@ -89,46 +89,24 @@ class HomePage(QWidget):
         title = QLabel("Face Attendance Desktop")
         title.setObjectName("pageTitle")
 
-        subtitle = QLabel("Dashboard tổng quan hệ thống check-in/check-out bằng khuôn mặt.")
+        subtitle = QLabel("Dashboard tổng quan theo lớp học phần đang chọn.")
         subtitle.setObjectName("mutedText")
         subtitle.setWordWrap(True)
 
-        self.card_total_students = StatCard(
-            "Tổng số sinh viên",
-            "0",
-            "Sinh viên đã lưu trong SQLite",
-            "#2f6fed",
-        )
-        self.card_checked_in_today = StatCard(
-            "Đã check-in hôm nay",
-            "0",
-            "Số sinh viên đã quét check-in",
-            "#10b981",
-        )
-        self.card_late_today = StatCard(
-            "Đi trễ hôm nay",
-            "0",
-            "Check-in sau 07:30",
-            "#f59e0b",
-        )
-        self.card_not_checked_out_today = StatCard(
-            "Chưa check-out",
-            "0",
-            "Đã check-in nhưng chưa check-out",
-            "#ef4444",
-        )
-        self.card_face_images = StatCard(
-            "Tổng ảnh khuôn mặt",
-            "0",
-            "Ảnh trong dataset/students",
-            "#8b5cf6",
-        )
-        self.card_model_status = StatCard(
-            "Trạng thái model",
-            "Chưa train",
-            "Kiểm tra models/face_model.yml và label_map.json",
-            "#0ea5e9",
-        )
+        filter_row = QHBoxLayout()
+        section_label = QLabel("Lớp học phần")
+        section_label.setObjectName("mutedText")
+        self.section_combo = QComboBox()
+        self.section_combo.currentIndexChanged.connect(self.load_dashboard_data)
+        filter_row.addWidget(section_label)
+        filter_row.addWidget(self.section_combo, 1)
+
+        self.card_total_students = StatCard("Tổng số sinh viên", "0", "Sinh viên đã lưu trong SQLite", "#2f6fed")
+        self.card_checked_in_today = StatCard("Đã check-in hôm nay", "0", "Theo lớp học phần đang chọn", "#10b981")
+        self.card_late_today = StatCard("Đi trễ hôm nay", "0", "Dựa trên late_time của lớp học phần", "#f59e0b")
+        self.card_not_checked_out_today = StatCard("Chưa check-out", "0", "Đã check-in nhưng chưa check-out", "#ef4444")
+        self.card_face_images = StatCard("Tổng ảnh khuôn mặt", "0", "Ảnh trong dataset/students", "#8b5cf6")
+        self.card_model_status = StatCard("Trạng thái model", "Chưa train", "Kiểm tra models/face_model.yml", "#0ea5e9")
 
         grid = QGridLayout()
         grid.setSpacing(16)
@@ -139,15 +117,31 @@ class HomePage(QWidget):
         grid.addWidget(self.card_face_images, 1, 1)
         grid.addWidget(self.card_model_status, 1, 2)
 
-        info = QLabel("Dữ liệu dashboard được lấy tự động từ SQLite, thư mục dataset và file model.")
+        info = QLabel("Dữ liệu dashboard được lấy từ SQLite, dataset và model theo lớp học phần đang chọn.")
         info.setObjectName("infoBox")
         info.setWordWrap(True)
 
         layout.addWidget(title)
         layout.addWidget(subtitle)
+        layout.addLayout(filter_row)
         layout.addLayout(grid)
         layout.addWidget(info)
         layout.addStretch()
+
+    def load_sections(self):
+        """Load danh sách lớp học phần cho bộ lọc dashboard."""
+        current_section_id = self.section_combo.currentData()
+        self.section_combo.blockSignals(True)
+        self.section_combo.clear()
+        for section_id, _subject_id, subject_name, section_name, _start_time, late_time in get_course_sections():
+            text = f"{section_id} - {subject_name} - {section_name} | Trễ sau {late_time or '07:30:00'}"
+            self.section_combo.addItem(text, section_id)
+
+        if current_section_id:
+            index = self.section_combo.findData(current_section_id)
+            if index >= 0:
+                self.section_combo.setCurrentIndex(index)
+        self.section_combo.blockSignals(False)
 
     def count_face_images(self):
         """Đếm toàn bộ ảnh khuôn mặt trong dataset/students."""
@@ -175,9 +169,10 @@ class HomePage(QWidget):
         except (OSError, json.JSONDecodeError):
             return False
 
-    def load_dashboard_data(self):
+    def load_dashboard_data(self, *_args):
         """Load dữ liệu mới nhất khi mở app hoặc quay lại trang chủ."""
-        stats = get_dashboard_stats()
+        self.load_sections()
+        stats = get_dashboard_stats(self.section_combo.currentData())
         face_image_count = self.count_face_images()
         model_trained = self.is_model_trained()
 

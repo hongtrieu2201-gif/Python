@@ -14,6 +14,7 @@ from ui.attendance_page import AttendancePage
 from ui.history_page import HistoryPage
 from ui.home_page import HomePage
 from ui.register_face_page import RegisterFacePage
+from ui.section_page import SectionPage
 from ui.student_page import StudentPage
 from ui.train_page import TrainPage
 
@@ -48,6 +49,7 @@ class MainWindow(QMainWindow):
             "Quản lý sinh viên",
             "Đăng ký khuôn mặt",
             "Huấn luyện model",
+            "Môn học / Lớp học phần",
             "Điểm danh webcam",
             "Lịch sử điểm danh",
         ]
@@ -62,6 +64,7 @@ class MainWindow(QMainWindow):
         self.student_page = StudentPage()
         self.register_face_page = RegisterFacePage()
         self.train_page = TrainPage()
+        self.section_page = SectionPage()
         self.attendance_page = AttendancePage()
         self.history_page = HistoryPage()
 
@@ -70,6 +73,7 @@ class MainWindow(QMainWindow):
             self.student_page,
             self.register_face_page,
             self.train_page,
+            self.section_page,
             self.attendance_page,
             self.history_page,
         ]:
@@ -95,8 +99,11 @@ class MainWindow(QMainWindow):
         if index == 2:
             self.register_face_page.load_students()
         if index == 4:
-            self.attendance_page.reload_model()
+            self.section_page.load_data()
         if index == 5:
+            self.attendance_page.load_sections()
+            self.attendance_page.reload_model(silent=True)
+        if index == 6:
             self.history_page.load_history()
 
         self.stack.setCurrentIndex(index)

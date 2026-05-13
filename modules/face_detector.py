@@ -35,6 +35,27 @@ class FaceDetector:
             )
         return gray, faces
 
+    def detect_main_face(self, frame):
+        """Chỉ chọn 1 khuôn mặt chính hợp lệ để điểm danh."""
+        gray, faces = self.detect_faces(frame)
+        valid_faces = []
+
+        for x, y, w, h in faces:
+            if w < 120 or h < 120:
+                continue
+
+            ratio = w / h
+            if ratio < 0.65 or ratio > 1.45:
+                continue
+
+            valid_faces.append((x, y, w, h))
+
+        if not valid_faces:
+            return gray, None
+
+        main_face = max(valid_faces, key=lambda rect: rect[2] * rect[3])
+        return gray, main_face
+
     def get_largest_face(self, frame):
         gray, faces = self.detect_faces(frame)
         if len(faces) == 0:

@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 
 import pandas as pd
 from PyQt6.QtCore import QDate
@@ -16,7 +17,12 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from modules.database import delete_today_attendance, get_attendance_history
+from modules.database import (
+    delete_all_attendance,
+    delete_attendance_by_date,
+    get_attendance_history,
+    recalculate_attendance_statuses,
+)
 
 
 class HistoryPage(QWidget):
@@ -37,25 +43,44 @@ class HistoryPage(QWidget):
         self.date_edit.setDate(QDate.currentDate())
         self.refresh_button = QPushButton("Làm mới")
         self.export_button = QPushButton("Xuất CSV")
+        self.recalculate_status_button = QPushButton("Cập nhật trạng thái trễ")
         self.delete_today_button = QPushButton("Xóa lịch sử hôm nay")
+        self.delete_selected_date_button = QPushButton("Xóa lịch sử ngày chọn")
+        self.delete_all_button = QPushButton("Xóa tất cả lịch sử")
 
         controls.addWidget(self.filter_checkbox)
         controls.addWidget(self.date_edit)
         controls.addWidget(self.refresh_button)
         controls.addWidget(self.export_button)
+        controls.addWidget(self.recalculate_status_button)
         controls.addWidget(self.delete_today_button)
+        controls.addWidget(self.delete_selected_date_button)
+        controls.addWidget(self.delete_all_button)
         controls.addStretch()
 
-        self.table = QTableWidget(0, 7)
+        self.table = QTableWidget(0, 9)
         self.table.setHorizontalHeaderLabels(
-            ["Mã SV", "Họ tên", "Lớp", "Ngày", "Check-in", "Check-out", "Trạng thái"]
+            [
+                "Mã SV",
+                "Họ tên",
+                "Lớp",
+                "Môn học",
+                "Lớp học phần",
+                "Ngày",
+                "Check-in",
+                "Check-out",
+                "Trạng thái",
+            ]
         )
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
 
         self.refresh_button.clicked.connect(self.load_history)
         self.export_button.clicked.connect(self.export_csv)
+        self.recalculate_status_button.clicked.connect(self.recalculate_statuses)
         self.delete_today_button.clicked.connect(self.delete_today_history)
+        self.delete_selected_date_button.clicked.connect(self.delete_selected_date_history)
+        self.delete_all_button.clicked.connect(self.delete_all_history)
         self.filter_checkbox.stateChanged.connect(self.load_history)
         self.date_edit.dateChanged.connect(self.load_history)
 
@@ -80,24 +105,67 @@ class HistoryPage(QWidget):
         if hasattr(main_window, "home_page"):
             main_window.home_page.load_dashboard_data()
 
-    def delete_today_history(self):
-        """Xóa lịch sử check-in/check-out hôm nay, giữ nguyên sinh viên, ảnh và model."""
+    def show_delete_result(self, deleted_count):
+        """Thông báo kết quả sau khi xóa dữ liệu attendance."""
+        self.load_history()
+        self.refresh_dashboard()
+        if deleted_count > 0:
+            QMessageBox.information(self, "Đã xóa", f"Đã xóa {deleted_count} bản ghi.")
+        else:
+            QMessageBox.information(self, "Không có dữ liệu", "Không có dữ liệu phù hợp để xóa.")
+
+    def recalculate_statuses(self):
+        """Cập nhật lại Late/Present theo late_time hiện tại của lớp học phần."""
         confirm = QMessageBox.question(
             self,
-            "Xác nhận xóa",
-            "Bạn có chắc muốn xóa toàn bộ lịch sử check-in/check-out của ngày hôm nay?",
+            "Cập nhật trạng thái trễ",
+            "Bạn có muốn cập nhật lại status Late/Present theo late_time hiện tại không?",
         )
         if confirm != QMessageBox.StandardButton.Yes:
             return
 
-        deleted_count = delete_today_attendance()
+        updated_count = recalculate_attendance_statuses()
         self.load_history()
         self.refresh_dashboard()
-        QMessageBox.information(
+        QMessageBox.information(self, "Hoàn tất", f"Đã cập nhật {updated_count} bản ghi.")
+
+    def delete_today_history(self):
+        """Xóa lịch sử điểm danh của ngày hôm nay."""
+        confirm = QMessageBox.question(
             self,
-            "Đã xóa lịch sử hôm nay",
-            f"Đã xóa {deleted_count} bản ghi check-in/check-out hôm nay.",
+            "Xác nhận xóa",
+            "Bạn có chắc muốn xóa lịch sử điểm danh hôm nay không?",
         )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        self.show_delete_result(delete_attendance_by_date(today))
+
+    def delete_selected_date_history(self):
+        """Xóa lịch sử điểm danh theo ngày đang chọn trong QDateEdit."""
+        selected_date = self.date_edit.date().toString("yyyy-MM-dd")
+        confirm = QMessageBox.question(
+            self,
+            "Xác nhận xóa",
+            f"Bạn có chắc muốn xóa lịch sử điểm danh ngày {selected_date} không?",
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        self.show_delete_result(delete_attendance_by_date(selected_date))
+
+    def delete_all_history(self):
+        """Xóa toàn bộ bảng attendance, không xóa dữ liệu khác."""
+        confirm = QMessageBox.question(
+            self,
+            "Cảnh báo xóa toàn bộ",
+            "Bạn có chắc muốn xóa TOÀN BỘ lịch sử điểm danh không? Hành động này không thể hoàn tác.",
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        self.show_delete_result(delete_all_attendance())
 
     def export_csv(self):
         rows = get_attendance_history(self.current_date_filter())
@@ -117,7 +185,17 @@ class HistoryPage(QWidget):
 
         df = pd.DataFrame(
             rows,
-            columns=["Mã sinh viên", "Họ tên", "Lớp", "Ngày", "Check-in", "Check-out", "Trạng thái"],
+            columns=[
+                "Mã sinh viên",
+                "Họ tên",
+                "Lớp",
+                "Môn học",
+                "Lớp học phần",
+                "Ngày",
+                "Check-in",
+                "Check-out",
+                "Trạng thái",
+            ],
         )
         df.to_csv(file_path, index=False, encoding="utf-8-sig")
         QMessageBox.information(self, "Xuất CSV", f"Đã xuất file: {file_path}")

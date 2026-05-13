@@ -11,6 +11,16 @@ DATASET_DIR = os.path.join(BASE_DIR, "dataset", "students")
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 MODEL_PATH = os.path.join(MODELS_DIR, "face_model.yml")
 LABEL_MAP_PATH = os.path.join(MODELS_DIR, "label_map.json")
+FACE_SIZE = (200, 200)
+
+
+def preprocess_face_image(gray_face):
+    """Chuẩn hóa ảnh mặt cho LBPH: grayscale, equalizeHist, resize 200x200."""
+    if len(gray_face.shape) == 3:
+        gray_face = cv2.cvtColor(gray_face, cv2.COLOR_BGR2GRAY)
+    gray_face = cv2.equalizeHist(gray_face)
+    gray_face = cv2.resize(gray_face, FACE_SIZE)
+    return gray_face.astype(np.uint8)
 
 
 def train_model():
@@ -36,7 +46,7 @@ def train_model():
             image_path = os.path.join(student_dir, file_name)
             image = Image.open(image_path).convert("L")
             image_np = np.array(image, dtype=np.uint8)
-            student_images.append(image_np)
+            student_images.append(preprocess_face_image(image_np))
 
         if not student_images:
             continue

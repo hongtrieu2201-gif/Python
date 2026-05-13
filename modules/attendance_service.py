@@ -1,24 +1,53 @@
-from datetime import datetime
+from datetime import datetime, time
 
-from modules.database import add_check_in, get_today_attendance, update_check_out
+from modules.database import add_check_in, get_course_section, get_today_attendance, update_check_out
 
 
-CHECK_IN_DEADLINE = "07:30:00"
+DEFAULT_LATE_TIME = "07:30:00"
+
+
+def parse_time_value(value, default=DEFAULT_LATE_TIME):
+    """Chuyển chuỗi giờ về datetime.time, hỗ trợ 7:30, 07:30, 07:30:00."""
+    if isinstance(value, time):
+        return value
+
+    text = str(value or "").strip()
+    if not text:
+        text = default
+
+    for fmt in ("%H:%M:%S", "%H:%M"):
+        try:
+            return datetime.strptime(text, fmt).time()
+        except ValueError:
+            continue
+
+    # Nếu format bị lỗi, dùng mốc mặc định 07:30:00.
+    return datetime.strptime(default, "%H:%M:%S").time()
+
+
+def calculate_attendance_status(check_in_time, late_time):
+    """Tính Present/Late bằng kiểu datetime.time, không so sánh chuỗi."""
+    check_in = parse_time_value(check_in_time)
+    late = parse_time_value(late_time)
+    return "Late" if check_in > late else "Present"
 
 
 class AttendanceService:
-    """Xử lý nghiệp vụ check-in/check-out, không tạo nhiều dòng trong cùng ngày."""
+    """Xử lý nghiệp vụ check-in/check-out theo lớp học phần."""
 
-    def mark_present(self, student_id):
-        """Xử lý một lần quét khuôn mặt của sinh viên."""
+    def mark_present(self, student_id, section_id):
+        """Xử lý một lần quét mặt trong một lớp học phần cụ thể."""
         now = datetime.now()
         date_text = now.strftime("%Y-%m-%d")
         time_text = now.strftime("%H:%M:%S")
 
-        attendance = get_today_attendance(student_id, date_text)
+        section = get_course_section(section_id)
+        late_time = section[5] if section and section[5] else DEFAULT_LATE_TIME
+
+        attendance = get_today_attendance(student_id, section_id, date_text)
         if attendance is None:
-            status = "Late" if time_text > CHECK_IN_DEADLINE else "Present"
-            inserted = add_check_in(student_id, date_text, time_text, status)
+            status = calculate_attendance_status(time_text, late_time)
+            inserted = add_check_in(student_id, section_id, date_text, time_text, status)
             if inserted:
                 return {
                     "action": "check_in",
@@ -26,10 +55,10 @@ class AttendanceService:
                     "check_in_time": time_text,
                     "check_out_time": None,
                     "status": status,
+                    "late_time": late_time,
                 }
 
-            # Trường hợp hiếm: đã có dòng do insert gần như đồng thời.
-            attendance = get_today_attendance(student_id, date_text)
+            attendance = get_today_attendance(student_id, section_id, date_text)
 
         attendance_id, check_in_time, check_out_time, status = attendance
         if check_out_time is None:
@@ -40,6 +69,7 @@ class AttendanceService:
                 "check_in_time": check_in_time,
                 "check_out_time": time_text,
                 "status": status,
+                "late_time": late_time,
             }
 
         return {
@@ -48,4 +78,5 @@ class AttendanceService:
             "check_in_time": check_in_time,
             "check_out_time": check_out_time,
             "status": status,
+            "late_time": late_time,
         }
