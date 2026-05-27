@@ -1,4 +1,5 @@
 import os
+import traceback
 from datetime import datetime
 
 import cv2
@@ -9,7 +10,7 @@ from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout, QWidget
 
 from modules.attendance_service import AttendanceService
-from modules.database import get_course_sections
+from modules.database import get_course_sections, is_student_in_section
 from modules.face_recognizer import FaceRecognizer
 
 
@@ -182,8 +183,14 @@ class AttendancePage(QWidget):
                 section_id = self.section_combo.currentData()
                 if not section_id:
                     frame_status = "Vui lòng chọn lớp học phần trước khi điểm danh."
+                elif not is_student_in_section(section_id, student_id):
+                    frame_status = f"{full_name} không thuộc lớp học phần đang chọn."
                 else:
-                    attendance_result = self.attendance_service.mark_present(student_id, section_id)
+                    try:
+                        attendance_result = self.attendance_service.mark_present(student_id, section_id)
+                    except Exception:
+                        traceback.print_exc()
+                        attendance_result = {"action": "error"}
                     action = attendance_result["action"]
                     if action == "check_in":
                         frame_status = (
@@ -195,6 +202,8 @@ class AttendancePage(QWidget):
                             f"Check-out thành công: {full_name} lúc "
                             f"{attendance_result['check_out_time']}"
                         )
+                    elif action == "error":
+                        frame_status = "Lỗi lưu điểm danh. Vui lòng xem terminal để debug."
                     else:
                         frame_status = (
                             f"{full_name} đã check-out hôm nay lúc "

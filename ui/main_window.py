@@ -22,7 +22,7 @@ from ui.train_page import TrainPage
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Face Attendance Desktop")
+        self.setWindowTitle("Hệ Thống Điểm Danh")
         self.resize(1180, 720)
         self.setup_ui()
 
@@ -38,7 +38,7 @@ class MainWindow(QMainWindow):
         sidebar_layout.setContentsMargins(16, 20, 16, 20)
         sidebar_layout.setSpacing(16)
 
-        app_title = QLabel("Face Attendance\nDesktop")
+        app_title = QLabel("Hệ Thống\nĐiểm Danh")
         app_title.setObjectName("appTitle")
         app_title.setAlignment(Qt.AlignmentFlag.AlignLeft)
 
@@ -96,14 +96,17 @@ class MainWindow(QMainWindow):
 
         if index == 0:
             self.home_page.load_dashboard_data()
+        if index == 1:
+            self.student_page.refresh_student_table()
         if index == 2:
-            self.register_face_page.load_students()
+            self.register_face_page.refresh_sections_and_students()
         if index == 4:
             self.section_page.load_data()
         if index == 5:
             self.attendance_page.load_sections()
             self.attendance_page.reload_model(silent=True)
         if index == 6:
+            self.history_page.load_sections()
             self.history_page.load_history()
 
         self.stack.setCurrentIndex(index)
@@ -128,10 +131,12 @@ class MainWindow(QMainWindow):
                 max-width: 230px;
             }
             #appTitle {
-                color: white;
-                font-size: 22px;
-                font-weight: 700;
-                padding: 8px;
+                background: #f8fafc;
+                color: #172033;
+                font-size: 20px;
+                font-weight: 800;
+                padding: 16px;
+                border-radius: 8px;
             }
             #sidebarMenu {
                 background: transparent;

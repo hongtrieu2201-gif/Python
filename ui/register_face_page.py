@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from modules.database import get_students
+from modules.database import get_course_sections, get_students_by_section
 from modules.face_detector import FaceDetector, save_face_image
 
 
@@ -35,16 +35,25 @@ class RegisterFacePage(QWidget):
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_frame)
         self.setup_ui()
-        self.load_students()
+        self.refresh_sections_and_students()
 
     def setup_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(14)
 
+        section_row = QHBoxLayout()
+        section_label = QLabel("Lớp học phần")
+        self.section_combo = QComboBox()
+        self.section_combo.setPlaceholderText("Chọn lớp học phần")
+        section_row.addWidget(section_label)
+        section_row.addWidget(self.section_combo, 1)
+
         student_row = QHBoxLayout()
+        student_label = QLabel("Sinh viên")
         self.student_combo = QComboBox()
         self.upload_button = QPushButton("Tải ảnh từ máy")
+        student_row.addWidget(student_label)
         student_row.addWidget(self.student_combo, 1)
         student_row.addWidget(self.upload_button)
 
@@ -90,15 +99,17 @@ class RegisterFacePage(QWidget):
         self.image_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.image_list.setMinimumHeight(190)
 
+        self.section_combo.currentIndexChanged.connect(self.load_students)
         self.student_combo.currentIndexChanged.connect(self.load_face_images)
         self.upload_button.clicked.connect(self.upload_face_image)
         self.open_button.clicked.connect(self.open_camera)
         self.capture_button.clicked.connect(self.capture_face)
         self.close_button.clicked.connect(self.release_camera)
-        self.refresh_students_button.clicked.connect(self.load_students)
+        self.refresh_students_button.clicked.connect(self.refresh_sections_and_students)
         self.refresh_images_button.clicked.connect(self.load_face_images)
         self.delete_image_button.clicked.connect(self.delete_selected_image)
 
+        layout.addLayout(section_row)
         layout.addLayout(student_row)
         layout.addWidget(self.video_label)
         layout.addLayout(camera_buttons)
@@ -107,16 +118,44 @@ class RegisterFacePage(QWidget):
         layout.addWidget(self.empty_images_label)
         layout.addWidget(self.image_list)
 
+    def refresh_sections_and_students(self):
+        """Làm mới lớp học phần và danh sách sinh viên theo lớp đang chọn."""
+        self.load_sections()
+        self.load_students()
+
+    def load_sections(self):
+        """Load danh sách lớp học phần từ database."""
+        current_section_id = self.section_combo.currentData()
+        self.section_combo.blockSignals(True)
+        self.section_combo.clear()
+
+        selected_index = 0
+        for index, (section_id, _subject_id, subject_name, section_name, _start_time, _late_time) in enumerate(
+            get_course_sections()
+        ):
+            display_text = f"{section_id} - {subject_name} - {section_name}"
+            self.section_combo.addItem(display_text, section_id)
+            if section_id == current_section_id:
+                selected_index = index
+
+        if self.section_combo.count() > 0:
+            self.section_combo.setCurrentIndex(selected_index)
+
+        self.section_combo.blockSignals(False)
+
     def load_students(self):
+        """Chỉ hiển thị sinh viên thuộc lớp học phần đang chọn."""
+        section_id = self.section_combo.currentData()
         current_student_id = self.student_combo.currentData()
         self.student_combo.blockSignals(True)
         self.student_combo.clear()
 
         selected_index = 0
-        for index, (student_id, full_name, class_name, _email) in enumerate(get_students()):
-            self.student_combo.addItem(f"{student_id} - {full_name} - {class_name or ''}", student_id)
-            if student_id == current_student_id:
-                selected_index = index
+        if section_id:
+            for index, (student_id, full_name, class_name, _contact) in enumerate(get_students_by_section(section_id)):
+                self.student_combo.addItem(f"{student_id} - {full_name} - {class_name or ''}", student_id)
+                if student_id == current_student_id:
+                    selected_index = index
 
         if self.student_combo.count() > 0:
             self.student_combo.setCurrentIndex(selected_index)

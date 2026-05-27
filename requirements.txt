@@ -3,3 +3,5 @@ opencv-contrib-python
 numpy
 pandas
 pillow
+openpyxl
+xlrd

@@ -29,7 +29,7 @@ def calculate_attendance_status(check_in_time, late_time):
     """Tính Present/Late bằng kiểu datetime.time, không so sánh chuỗi."""
     check_in = parse_time_value(check_in_time)
     late = parse_time_value(late_time)
-    return "Late" if check_in > late else "Present"
+    return "Đi trễ" if check_in > late else "Đúng giờ"
 
 
 class AttendanceService:
@@ -42,12 +42,13 @@ class AttendanceService:
         time_text = now.strftime("%H:%M:%S")
 
         section = get_course_section(section_id)
+        subject_id = section[1] if section else None
         late_time = section[5] if section and section[5] else DEFAULT_LATE_TIME
 
         attendance = get_today_attendance(student_id, section_id, date_text)
         if attendance is None:
             status = calculate_attendance_status(time_text, late_time)
-            inserted = add_check_in(student_id, section_id, date_text, time_text, status)
+            inserted = add_check_in(student_id, subject_id, section_id, date_text, time_text, status)
             if inserted:
                 return {
                     "action": "check_in",
@@ -59,6 +60,15 @@ class AttendanceService:
                 }
 
             attendance = get_today_attendance(student_id, section_id, date_text)
+            if attendance is None:
+                return {
+                    "action": "error",
+                    "date": date_text,
+                    "check_in_time": None,
+                    "check_out_time": None,
+                    "status": "Lỗi lưu điểm danh",
+                    "late_time": late_time,
+                }
 
         attendance_id, check_in_time, check_out_time, status = attendance
         if check_out_time is None:

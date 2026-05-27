@@ -5,10 +5,12 @@ import pandas as pd
 from PyQt6.QtCore import QDate
 from PyQt6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDateEdit,
     QFileDialog,
     QHBoxLayout,
     QHeaderView,
+    QLabel,
     QMessageBox,
     QPushButton,
     QTableWidget,
@@ -21,6 +23,7 @@ from modules.database import (
     delete_all_attendance,
     delete_attendance_by_date,
     get_attendance_history,
+    get_course_sections,
     recalculate_attendance_statuses,
 )
 
@@ -29,6 +32,7 @@ class HistoryPage(QWidget):
     def __init__(self):
         super().__init__()
         self.setup_ui()
+        self.load_sections()
         self.load_history()
 
     def setup_ui(self):
@@ -37,10 +41,16 @@ class HistoryPage(QWidget):
         layout.setSpacing(14)
 
         controls = QHBoxLayout()
+        self.section_label = QLabel("Lớp học phần")
+        self.section_combo = QComboBox()
+        self.section_combo.setMinimumWidth(260)
+        self.section_combo.setPlaceholderText("Chọn lớp học phần")
+
         self.filter_checkbox = QCheckBox("Lọc theo ngày")
         self.date_edit = QDateEdit()
         self.date_edit.setCalendarPopup(True)
         self.date_edit.setDate(QDate.currentDate())
+
         self.refresh_button = QPushButton("Làm mới")
         self.export_button = QPushButton("Xuất CSV")
         self.recalculate_status_button = QPushButton("Cập nhật trạng thái trễ")
@@ -48,6 +58,8 @@ class HistoryPage(QWidget):
         self.delete_selected_date_button = QPushButton("Xóa lịch sử ngày chọn")
         self.delete_all_button = QPushButton("Xóa tất cả lịch sử")
 
+        controls.addWidget(self.section_label)
+        controls.addWidget(self.section_combo)
         controls.addWidget(self.filter_checkbox)
         controls.addWidget(self.date_edit)
         controls.addWidget(self.refresh_button)
@@ -75,7 +87,8 @@ class HistoryPage(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
 
-        self.refresh_button.clicked.connect(self.load_history)
+        self.section_combo.currentIndexChanged.connect(self.load_history)
+        self.refresh_button.clicked.connect(self.refresh_page)
         self.export_button.clicked.connect(self.export_csv)
         self.recalculate_status_button.clicked.connect(self.recalculate_statuses)
         self.delete_today_button.clicked.connect(self.delete_today_history)
@@ -87,17 +100,49 @@ class HistoryPage(QWidget):
         layout.addLayout(controls)
         layout.addWidget(self.table)
 
+    def load_sections(self):
+        """Load danh sách lớp học phần để lọc lịch sử."""
+        current_section_id = self.section_combo.currentData()
+        self.section_combo.blockSignals(True)
+        self.section_combo.clear()
+
+        selected_index = 0
+        for index, (section_id, _subject_id, subject_name, section_name, _start_time, _late_time) in enumerate(
+            get_course_sections()
+        ):
+            self.section_combo.addItem(f"{section_id} - {subject_name} - {section_name}", section_id)
+            if section_id == current_section_id:
+                selected_index = index
+
+        if self.section_combo.count() > 0:
+            self.section_combo.setCurrentIndex(selected_index)
+
+        self.section_combo.blockSignals(False)
+
+    def current_section_id(self):
+        return self.section_combo.currentData()
+
     def current_date_filter(self):
         if not self.filter_checkbox.isChecked():
             return None
         return self.date_edit.date().toString("yyyy-MM-dd")
 
+    def refresh_page(self):
+        self.load_sections()
+        self.load_history()
+
     def load_history(self):
-        rows = get_attendance_history(self.current_date_filter())
+        """Hiển thị lịch sử theo lớp học phần đang chọn và ngày lọc nếu có."""
+        section_id = self.current_section_id()
+        if not section_id:
+            rows = []
+        else:
+            rows = get_attendance_history(section_id=section_id, date_filter=self.current_date_filter())
+
         self.table.setRowCount(len(rows))
         for row_index, row_data in enumerate(rows):
             for col_index, value in enumerate(row_data):
-                self.table.setItem(row_index, col_index, QTableWidgetItem(value or ""))
+                self.table.setItem(row_index, col_index, QTableWidgetItem(str(value or "")))
 
     def refresh_dashboard(self):
         """Refresh dashboard nếu HistoryPage đang nằm trong MainWindow."""
@@ -115,11 +160,11 @@ class HistoryPage(QWidget):
             QMessageBox.information(self, "Không có dữ liệu", "Không có dữ liệu phù hợp để xóa.")
 
     def recalculate_statuses(self):
-        """Cập nhật lại Late/Present theo late_time hiện tại của lớp học phần."""
+        """Cập nhật lại Đi trễ/Đúng giờ theo late_time hiện tại của lớp học phần."""
         confirm = QMessageBox.question(
             self,
             "Cập nhật trạng thái trễ",
-            "Bạn có muốn cập nhật lại status Late/Present theo late_time hiện tại không?",
+            "Bạn có muốn cập nhật lại trạng thái theo late_time hiện tại không?",
         )
         if confirm != QMessageBox.StandardButton.Yes:
             return
@@ -130,7 +175,6 @@ class HistoryPage(QWidget):
         QMessageBox.information(self, "Hoàn tất", f"Đã cập nhật {updated_count} bản ghi.")
 
     def delete_today_history(self):
-        """Xóa lịch sử điểm danh của ngày hôm nay."""
         confirm = QMessageBox.question(
             self,
             "Xác nhận xóa",
@@ -143,7 +187,6 @@ class HistoryPage(QWidget):
         self.show_delete_result(delete_attendance_by_date(today))
 
     def delete_selected_date_history(self):
-        """Xóa lịch sử điểm danh theo ngày đang chọn trong QDateEdit."""
         selected_date = self.date_edit.date().toString("yyyy-MM-dd")
         confirm = QMessageBox.question(
             self,
@@ -156,7 +199,6 @@ class HistoryPage(QWidget):
         self.show_delete_result(delete_attendance_by_date(selected_date))
 
     def delete_all_history(self):
-        """Xóa toàn bộ bảng attendance, không xóa dữ liệu khác."""
         confirm = QMessageBox.question(
             self,
             "Cảnh báo xóa toàn bộ",
@@ -168,7 +210,8 @@ class HistoryPage(QWidget):
         self.show_delete_result(delete_all_attendance())
 
     def export_csv(self):
-        rows = get_attendance_history(self.current_date_filter())
+        section_id = self.current_section_id()
+        rows = get_attendance_history(section_id=section_id, date_filter=self.current_date_filter()) if section_id else []
         if not rows:
             QMessageBox.warning(self, "Không có dữ liệu", "Không có lịch sử để xuất.")
             return

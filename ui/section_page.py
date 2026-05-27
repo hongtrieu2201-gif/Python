@@ -114,6 +114,10 @@ class SectionPage(QWidget):
         main_window = self.window()
         if hasattr(main_window, "attendance_page"):
             main_window.attendance_page.load_sections()
+        if hasattr(main_window, "student_page"):
+            main_window.student_page.refresh_student_table()
+        if hasattr(main_window, "register_face_page"):
+            main_window.register_face_page.refresh_sections_and_students()
         if hasattr(main_window, "home_page"):
             main_window.home_page.load_dashboard_data()
 

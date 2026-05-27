@@ -37,6 +37,7 @@ def init_database():
             )
             """
         )
+        migrate_students_table(conn)
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS subjects (
@@ -60,23 +61,88 @@ def init_database():
         )
         cursor.execute(
             """
+            CREATE TABLE IF NOT EXISTS section_students (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                section_id TEXT NOT NULL,
+                student_id TEXT NOT NULL,
+                UNIQUE(section_id, student_id)
+            )
+            """
+        )
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS attendance (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 student_id TEXT,
+                subject_id TEXT,
+                section_id TEXT,
+                attendance_date TEXT,
                 date TEXT,
                 time TEXT,
+                check_in_time TEXT,
+                check_out_time TEXT,
                 status TEXT,
+                created_at TEXT,
                 FOREIGN KEY(student_id) REFERENCES students(student_id)
             )
             """
         )
 
+        if not column_exists(cursor, "attendance", "subject_id"):
+            cursor.execute("ALTER TABLE attendance ADD COLUMN subject_id TEXT")
+        if not column_exists(cursor, "attendance", "attendance_date"):
+            cursor.execute("ALTER TABLE attendance ADD COLUMN attendance_date TEXT")
         if not column_exists(cursor, "attendance", "check_in_time"):
             cursor.execute("ALTER TABLE attendance ADD COLUMN check_in_time TEXT")
         if not column_exists(cursor, "attendance", "check_out_time"):
             cursor.execute("ALTER TABLE attendance ADD COLUMN check_out_time TEXT")
         if not column_exists(cursor, "attendance", "section_id"):
             cursor.execute("ALTER TABLE attendance ADD COLUMN section_id TEXT")
+        if not column_exists(cursor, "attendance", "created_at"):
+            cursor.execute("ALTER TABLE attendance ADD COLUMN created_at TEXT")
+
+        # Đồng bộ dữ liệu cũ: trước đây app dùng cột date/time.
+        cursor.execute(
+            """
+            UPDATE attendance
+            SET attendance_date = COALESCE(attendance_date, date)
+            WHERE attendance_date IS NULL
+            """
+        )
+        cursor.execute(
+            """
+            UPDATE attendance
+            SET created_at = COALESCE(created_at, datetime('now'))
+            WHERE created_at IS NULL
+            """
+        )
+        cursor.execute(
+            """
+            UPDATE attendance
+            SET subject_id = (
+                SELECT subject_id
+                FROM course_sections
+                WHERE course_sections.section_id = attendance.section_id
+            )
+            WHERE (subject_id IS NULL OR subject_id = '')
+              AND section_id IS NOT NULL
+              AND section_id <> ''
+            """
+        )
+
+        # Nếu database cũ đã có lịch sử điểm danh, tự tạo quan hệ
+        # sinh viên - lớp học phần từ các bản ghi attendance hiện có.
+        cursor.execute(
+            """
+            INSERT OR IGNORE INTO section_students(section_id, student_id)
+            SELECT DISTINCT section_id, student_id
+            FROM attendance
+            WHERE section_id IS NOT NULL
+              AND section_id <> ''
+              AND student_id IS NOT NULL
+              AND student_id <> ''
+            """
+        )
 
         # Dữ liệu cũ dùng cột time, chuyển sang check_in_time để không mất lịch sử.
         cursor.execute(
@@ -90,12 +156,14 @@ def init_database():
             """
             UPDATE attendance
             SET status = CASE
-                WHEN check_in_time > '07:30:00' THEN 'Late'
-                ELSE 'Present'
+                WHEN check_in_time > '07:30:00' THEN 'Đi trễ'
+                ELSE 'Đúng giờ'
             END
             WHERE check_in_time IS NOT NULL AND (status IS NULL OR status = '')
             """
         )
+        cursor.execute("UPDATE attendance SET status = 'Đi trễ' WHERE status = 'Late'")
+        cursor.execute("UPDATE attendance SET status = 'Đúng giờ' WHERE status = 'Present'")
 
         cursor.execute("DROP INDEX IF EXISTS idx_attendance_student_date")
         cursor.execute(
@@ -104,31 +172,104 @@ def init_database():
             WHERE id NOT IN (
                 SELECT MIN(id)
                 FROM attendance
-                GROUP BY student_id, section_id, date
+                GROUP BY student_id, section_id, attendance_date
             )
             """
         )
+        cursor.execute("DROP INDEX IF EXISTS idx_attendance_student_section_date")
         cursor.execute(
             """
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_attendance_student_section_date
-            ON attendance(student_id, section_id, date)
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_attendance_student_section_attendance_date
+            ON attendance(student_id, section_id, attendance_date)
             """
         )
         conn.commit()
 
 
-def add_student(student_id, full_name, class_name, email):
+def migrate_students_table(conn):
+    """Migrate bảng students sang schema mới có id/contact/created_at."""
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA table_info(students)")
+    columns = [row[1] for row in cursor.fetchall()]
+
+    if "id" in columns and "contact" in columns:
+        return
+
+    conn.execute("PRAGMA foreign_keys = OFF")
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS students_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id TEXT UNIQUE NOT NULL,
+            full_name TEXT NOT NULL,
+            class_name TEXT NOT NULL,
+            contact TEXT,
+            face_image_path TEXT,
+            created_at TEXT
+        )
+        """
+    )
+
+    contact_expr = "contact" if "contact" in columns else "email"
+    class_expr = "COALESCE(class_name, '')"
+    cursor.execute(
+        f"""
+        INSERT OR IGNORE INTO students_new(student_id, full_name, class_name, contact, face_image_path, created_at)
+        SELECT
+            student_id,
+            full_name,
+            {class_expr},
+            {contact_expr},
+            NULL,
+            datetime('now')
+        FROM students
+        WHERE student_id IS NOT NULL AND full_name IS NOT NULL
+        """
+    )
+    cursor.execute("DROP TABLE students")
+    cursor.execute("ALTER TABLE students_new RENAME TO students")
+    conn.execute("PRAGMA foreign_keys = ON")
+
+
+def add_student(student_id, full_name, class_name, contact):
     """Thêm sinh viên mới, trả về False nếu mã sinh viên bị trùng."""
     try:
         with get_connection() as conn:
             conn.execute(
-                "INSERT INTO students(student_id, full_name, class_name, email) VALUES (?, ?, ?, ?)",
-                (student_id, full_name, class_name, email),
+                """
+                INSERT INTO students(student_id, full_name, class_name, contact, created_at)
+                VALUES (?, ?, ?, ?, datetime('now'))
+                """,
+                (student_id, full_name, class_name, contact),
             )
             conn.commit()
         return True
     except sqlite3.IntegrityError:
         return False
+
+
+def upsert_student(student_id, full_name, class_name, contact):
+    """Thêm sinh viên chung nếu chưa có, nếu đã có thì giữ dữ liệu hiện tại."""
+    try:
+        with get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT 1 FROM students WHERE student_id = ?",
+                (student_id,),
+            )
+            if cursor.fetchone():
+                return False
+
+            conn.execute(
+                """
+                INSERT INTO students(student_id, full_name, class_name, contact, created_at)
+                VALUES (?, ?, ?, ?, datetime('now'))
+                """,
+                (student_id, full_name, class_name, contact),
+            )
+            conn.commit()
+            return True
+    except sqlite3.Error:
+        raise
 
 
 def delete_student(student_id):
@@ -141,7 +282,23 @@ def delete_student(student_id):
 def get_students():
     with get_connection() as conn:
         cursor = conn.execute(
-            "SELECT student_id, full_name, class_name, email FROM students ORDER BY student_id"
+            "SELECT student_id, full_name, class_name, contact FROM students ORDER BY student_id"
+        )
+        return cursor.fetchall()
+
+
+def get_students_by_section(section_id):
+    """Lấy danh sách sinh viên thuộc một lớp học phần."""
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            SELECT s.student_id, s.full_name, s.class_name, s.contact
+            FROM section_students ss
+            JOIN students s ON ss.student_id = s.student_id
+            WHERE ss.section_id = ?
+            ORDER BY s.student_id
+            """,
+            (section_id,),
         )
         return cursor.fetchall()
 
@@ -149,10 +306,45 @@ def get_students():
 def get_student(student_id):
     with get_connection() as conn:
         cursor = conn.execute(
-            "SELECT student_id, full_name, class_name, email FROM students WHERE student_id = ?",
+            "SELECT student_id, full_name, class_name, contact FROM students WHERE student_id = ?",
             (student_id,),
         )
         return cursor.fetchone()
+
+
+def add_student_to_section(section_id, student_id):
+    """Gắn sinh viên vào lớp học phần, trả về False nếu đã có trong lớp."""
+    try:
+        with get_connection() as conn:
+            conn.execute(
+                "INSERT INTO section_students(section_id, student_id) VALUES (?, ?)",
+                (section_id, student_id),
+            )
+            conn.commit()
+            return True
+    except sqlite3.IntegrityError:
+        return False
+
+
+def remove_student_from_section(section_id, student_id):
+    """Chỉ xóa quan hệ sinh viên khỏi lớp học phần, không xóa bảng students."""
+    with get_connection() as conn:
+        cursor = conn.execute(
+            "DELETE FROM section_students WHERE section_id = ? AND student_id = ?",
+            (section_id, student_id),
+        )
+        conn.commit()
+        return cursor.rowcount
+
+
+def is_student_in_section(section_id, student_id):
+    """Kiểm tra sinh viên có thuộc lớp học phần đang điểm danh không."""
+    with get_connection() as conn:
+        cursor = conn.execute(
+            "SELECT 1 FROM section_students WHERE section_id = ? AND student_id = ?",
+            (section_id, student_id),
+        )
+        return cursor.fetchone() is not None
 
 
 def add_subject(subject_id, subject_name, teacher_name):
@@ -261,6 +453,7 @@ def delete_course_section(section_id):
         if attendance_count > 0:
             return False, "Không thể xóa lớp học phần vì đang được dùng trong lịch sử điểm danh."
 
+        conn.execute("DELETE FROM section_students WHERE section_id = ?", (section_id,))
         cursor = conn.execute("DELETE FROM course_sections WHERE section_id = ?", (section_id,))
         conn.commit()
         if cursor.rowcount == 0:
@@ -281,6 +474,7 @@ def delete_default_course_data():
                 "Không thể xóa DEFAULT_SECTION vì đang được dùng trong lịch sử điểm danh.",
             )
 
+        conn.execute("DELETE FROM section_students WHERE section_id = ?", (DEFAULT_SECTION_ID,))
         conn.execute("DELETE FROM course_sections WHERE section_id = ?", (DEFAULT_SECTION_ID,))
         subject_section_count = conn.execute(
             "SELECT COUNT(*) FROM course_sections WHERE subject_id = ?",
@@ -299,7 +493,7 @@ def get_today_attendance(student_id, section_id, date_text):
             """
             SELECT id, check_in_time, check_out_time, status
             FROM attendance
-            WHERE student_id = ? AND section_id = ? AND date = ?
+            WHERE student_id = ? AND section_id = ? AND attendance_date = ?
             LIMIT 1
             """,
             (student_id, section_id, date_text),
@@ -307,21 +501,36 @@ def get_today_attendance(student_id, section_id, date_text):
         return cursor.fetchone()
 
 
-def add_check_in(student_id, section_id, date_text, check_in_time, status):
+def add_check_in(student_id, subject_id, section_id, date_text, check_in_time, status):
     """Tạo bản ghi check-in đầu tiên trong ngày của một lớp học phần."""
     try:
         with get_connection() as conn:
             conn.execute(
                 """
-                INSERT INTO attendance(student_id, section_id, date, time, check_in_time, check_out_time, status)
-                VALUES (?, ?, ?, ?, ?, NULL, ?)
+                INSERT INTO attendance(
+                    student_id,
+                    subject_id,
+                    section_id,
+                    attendance_date,
+                    date,
+                    time,
+                    check_in_time,
+                    check_out_time,
+                    status,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, datetime('now'))
                 """,
-                (student_id, section_id, date_text, check_in_time, check_in_time, status),
+                (student_id, subject_id, section_id, date_text, date_text, check_in_time, check_in_time, status),
             )
             conn.commit()
             return True
-    except sqlite3.IntegrityError:
+    except sqlite3.IntegrityError as error:
+        print(f"Lỗi insert attendance: {error}")
         return False
+    except sqlite3.Error as error:
+        print(f"Lỗi database khi điểm danh: {error}")
+        raise
 
 
 def update_check_out(attendance_id, check_out_time):
@@ -363,6 +572,42 @@ def get_attendance_history(date_filter=None):
         return cursor.fetchall()
 
 
+def get_attendance_history(section_id=None, date_filter=None):
+    """Lấy lịch sử điểm danh, có thể lọc theo lớp học phần và ngày."""
+    query = """
+        SELECT
+            a.student_id,
+            st.full_name,
+            st.class_name,
+            COALESCE(sb.subject_name, sb2.subject_name, ''),
+            COALESCE(cs.section_name, a.section_id, ''),
+            a.attendance_date,
+            a.check_in_time,
+            COALESCE(a.check_out_time, 'Chưa check-out'),
+            a.status
+        FROM attendance a
+        LEFT JOIN students st ON a.student_id = st.student_id
+        LEFT JOIN course_sections cs ON a.section_id = cs.section_id
+        LEFT JOIN subjects sb ON cs.subject_id = sb.subject_id
+        LEFT JOIN subjects sb2 ON a.subject_id = sb2.subject_id
+    """
+    where_clauses = []
+    params = []
+    if section_id:
+        where_clauses.append("a.section_id = ?")
+        params.append(section_id)
+    if date_filter:
+        where_clauses.append("a.attendance_date = ?")
+        params.append(date_filter)
+    if where_clauses:
+        query += " WHERE " + " AND ".join(where_clauses)
+    query += " ORDER BY a.attendance_date DESC, a.check_in_time DESC"
+
+    with get_connection() as conn:
+        cursor = conn.execute(query, tuple(params))
+        return cursor.fetchall()
+
+
 def delete_today_attendance():
     """Xóa toàn bộ lịch sử check-in/check-out hôm nay, không đụng dữ liệu khác."""
     today = datetime.now().strftime("%Y-%m-%d")
@@ -372,7 +617,7 @@ def delete_today_attendance():
 def delete_attendance_by_date(date_str):
     """Xóa lịch sử điểm danh theo ngày YYYY-MM-DD và trả về số dòng đã xóa."""
     with get_connection() as conn:
-        cursor = conn.execute("DELETE FROM attendance WHERE date = ?", (date_str,))
+        cursor = conn.execute("DELETE FROM attendance WHERE attendance_date = ?", (date_str,))
         conn.commit()
         return cursor.rowcount
 
@@ -426,24 +671,31 @@ def get_dashboard_stats(section_id=None):
         params.append(section_id)
 
     with get_connection() as conn:
-        total_students = conn.execute("SELECT COUNT(*) FROM students").fetchone()[0]
+        if section_id:
+            total_students = conn.execute(
+                "SELECT COUNT(*) FROM section_students WHERE section_id = ?",
+                (section_id,),
+            ).fetchone()[0]
+        else:
+            total_students = conn.execute("SELECT COUNT(*) FROM students").fetchone()[0]
+
         checked_in_today = conn.execute(
             f"""
             SELECT COUNT(*)
             FROM attendance
-            WHERE date = ? AND check_in_time IS NOT NULL{section_clause}
+            WHERE attendance_date = ? AND check_in_time IS NOT NULL{section_clause}
             """,
             tuple(params),
         ).fetchone()[0]
         late_today = conn.execute(
-            f"SELECT COUNT(*) FROM attendance WHERE date = ? AND status = 'Late'{section_clause}",
+            f"SELECT COUNT(*) FROM attendance WHERE attendance_date = ? AND status = 'Đi trễ'{section_clause}",
             tuple(params),
         ).fetchone()[0]
         not_checked_out_today = conn.execute(
             f"""
             SELECT COUNT(*)
             FROM attendance
-            WHERE date = ?
+            WHERE attendance_date = ?
               AND check_in_time IS NOT NULL
               AND check_out_time IS NULL{section_clause}
             """,
